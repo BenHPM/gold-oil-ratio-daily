@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 虚拟环境
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 日志文件
+*.log
+debug.log
+output.log
+
+# 调试文件
+debug_*.py
+_check_*.py
+_save_*.py
+*.json
+
+# 本地配置文件
+.config/
+.env
+.env.local
+
+# 飞书相关
+feishu_config.json
+
+# 其他
+.codebuddy/
+.workbuddy/
+bot/
+start_bot.bat
+金油比日报.md
