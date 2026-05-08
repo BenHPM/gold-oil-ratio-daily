@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-金油比数据存储模块 (v2 - 时段分离版)
+金油比数据存储模块 (v3 - 按天对比版)
 - 持久化每日金油比数据，按日期+时段存储
-- 支持查询历史数据用于多维度对比
+- 数据对比按时段类型分别计算（亚盘对比亚盘，美盘对比美盘）
 - 同一天可存储亚盘收盘、美盘收盘两条记录
 """
 
@@ -18,7 +18,7 @@ CST = timezone(timedelta(hours=8))
 DATA_FILE = os.path.join(os.path.dirname(__file__), 'gold_oil_data.json')
 
 # 有效时段列表
-VALID_SESSIONS = ["亚盘收盘", "美盘收盘", "欧盘时段"]
+VALID_SESSIONS = ["亚盘收盘", "美盘收盘"]
 
 
 def get_today_str():
@@ -100,64 +100,80 @@ def add_record(gold_price, oil_price, ratio, session=None):
 
 
 def get_current_session():
-    """根据当前北京时间判断时段"""
+    """根据当前北京时间判断时段（仅亚盘收盘/美盘收盘两种）
+    
+    亚盘收盘: 15:00 - 次日05:59（北京时间）
+    美盘收盘: 06:00 - 14:59（北京时间）
+    """
     now_cst = datetime.now(CST)
     hour = now_cst.hour
-    if 0 <= hour < 12:
+    if 6 <= hour < 15:
         return "美盘收盘"
-    elif 12 <= hour < 18:
-        return "亚盘收盘"
     else:
-        return "欧盘时段"
+        return "亚盘收盘"
 
 
-def get_latest_records(n=1):
+def get_records_by_session(session):
     """
-    获取最近 n 条记录（按时段计算）
-    
-    返回: 按时间倒序排列的记录列表
-    """
-    data = load_data()
-    records = sorted(data["records"], key=lambda x: (x["date"], x.get("session", "")), reverse=True)
-    return records[:n]
-
-
-def get_previous_session_ratio():
-    """
-    获取上一个时段的金油比
-    
-    逻辑: 取最近一条非当天的记录，或当天不同时段的记录
-    """
-    data = load_data()
-    records = sorted(data["records"], key=lambda x: (x["date"], x.get("session", "")), reverse=True)
-    
-    if len(records) < 2:
-        return None
-    
-    # 返回倒数第二条记录（上一时段）
-    return records[1]["ratio"]
-
-
-def get_ratio_n_sessions_avg(n):
-    """
-    获取最近 n 个时段的平均金油比（不包括当前时段）
+    获取指定时段的所有记录（按日期倒序）
     
     参数:
-        n: 时段数量（7个时段约等于3-4天）
+        session: 时段类型（亚盘收盘/美盘收盘/欧盘时段）
+    
+    返回: 该时段的记录列表，按日期倒序排列
     """
     data = load_data()
-    records = sorted(data["records"], key=lambda x: (x["date"], x.get("session", "")), reverse=True)
+    records = [r for r in data["records"] if r.get("session") == session]
+    # 按日期倒序，每天只保留一条
+    seen_dates = set()
+    unique_records = []
+    for r in sorted(records, key=lambda x: x["date"], reverse=True):
+        if r["date"] not in seen_dates:
+            seen_dates.add(r["date"])
+            unique_records.append(r)
+    return unique_records
+
+
+def get_yesterday_ratio(session):
+    """
+    获取昨天的金油比（同类型时段）
     
-    if len(records) < 2:
+    参数:
+        session: 当前时段类型
+    
+    返回: 昨日金油比，如果没有则返回 None
+    """
+    records = get_records_by_session(session)
+    today = get_today_str()
+    
+    # 找到今天之后的第一条记录（即昨天或更早）
+    for r in records:
+        if r["date"] < today:
+            return r["ratio"]
+    
+    return None
+
+
+def get_n_days_avg_ratio(session, n_days):
+    """
+    获取近 n 天的平均金油比（同类型时段）
+    
+    参数:
+        session: 时段类型
+        n_days: 天数
+    
+    返回: 近 n 天的平均金油比，如果数据不足则返回 None
+    """
+    records = get_records_by_session(session)
+    today = get_today_str()
+    
+    # 排除今天，取近 n 天
+    past_records = [r for r in records if r["date"] < today][:n_days]
+    
+    if not past_records:
         return None
     
-    # 取最近 n 条（不包括当前记录）
-    recent = records[1:n+1]
-    
-    if not recent:
-        return None
-    
-    avg_ratio = sum(r["ratio"] for r in recent) / len(recent)
+    avg_ratio = sum(r["ratio"] for r in past_records) / len(past_records)
     return round(avg_ratio, 2)
 
 
@@ -168,66 +184,67 @@ def calculate_change_percent(current, previous):
     return round((current - previous) / previous * 100, 2)
 
 
-def get_multi_period_changes(current_ratio):
+def get_multi_period_changes(current_ratio, session=None):
     """
-    获取多时间维度涨跌幅（基于时段计算）
+    获取多时间维度涨跌幅（按天对比，同类型时段）
     
-    时段对应关系:
-        - 上一时段: 约 6-18 小时前
-        - 近7时段: 约 3-4 天
-        - 近20时段: 约 10-14 天（近半月）
-        - 近60时段: 约 1 个月
+    对比维度:
+        - 昨日: 同类型时段的昨天数据
+        - 近7天: 同类型时段的近7天平均
+        - 近1月: 同类型时段的近30天平均
+        - 近1季: 同类型时段的近90天平均
     
     返回: {
-        "1s": {"ratio": x, "change": y, "symbol": "📈/📉"},
-        "7s": {...},
-        "20s": {...},
-        "60s": {...}
+        "1d": {"ratio": x, "change": y, "symbol": "📈/📉", "label": "昨日"},
+        "7d": {...},
+        "1m": {...},
+        "1q": {...}
     }
     """
-    data = load_data()
-    records = sorted(data["records"], key=lambda x: (x["date"], x.get("session", "")), reverse=True)
+    # 如果没有传入时段，自动获取当前时段
+    if session is None:
+        session = get_current_session()
     
     result = {}
     
-    # 1. 上一时段对比
-    prev_ratio = get_previous_session_ratio()
-    change = calculate_change_percent(current_ratio, prev_ratio)
-    result["1s"] = {
-        "ratio": prev_ratio,
+    # 1. 昨日对比
+    yesterday_ratio = get_yesterday_ratio(session)
+    change = calculate_change_percent(current_ratio, yesterday_ratio)
+    result["1d"] = {
+        "ratio": yesterday_ratio,
         "change": change,
         "symbol": get_change_symbol(change),
-        "label": "上一时段"
+        "label": "昨日"
     }
     
-    # 2. 近7时段平均对比
-    avg_7s = get_ratio_n_sessions_avg(7)
-    change = calculate_change_percent(current_ratio, avg_7s)
-    result["7s"] = {
-        "ratio": avg_7s,
+    # 2. 近7天平均对比
+    avg_7d = get_n_days_avg_ratio(session, 7)
+    change = calculate_change_percent(current_ratio, avg_7d)
+    result["7d"] = {
+        "ratio": avg_7d,
         "change": change,
         "symbol": get_change_symbol(change),
-        "label": "近7时段"
+        "label": "近7天"
     }
     
-    # 3. 近20时段平均对比（约半月）
-    avg_20s = get_ratio_n_sessions_avg(20)
-    change = calculate_change_percent(current_ratio, avg_20s)
-    result["20s"] = {
-        "ratio": avg_20s,
-        "change": change,
-        "symbol": get_change_symbol(change),
-        "label": "近半月"
-    }
-    
-    # 4. 近60时段平均对比（约1月）
-    avg_60s = get_ratio_n_sessions_avg(60)
-    change = calculate_change_percent(current_ratio, avg_60s)
-    result["60s"] = {
-        "ratio": avg_60s,
+    # 3. 近1月平均对比（30天）
+    avg_1m = get_n_days_avg_ratio(session, 30)
+    change = calculate_change_percent(current_ratio, avg_1m)
+    result["1m"] = {
+        "ratio": avg_1m,
         "change": change,
         "symbol": get_change_symbol(change),
         "label": "近1月"
+    }
+    
+    # 4. 近1季平均对比（90天）
+    avg_1q = get_n_days_avg_ratio(session, 90)
+    change = calculate_change_percent(current_ratio, avg_1q)
+    result["1q"] = {
+        "ratio": avg_1q,
+        "change": change,
+        "symbol": get_change_symbol(change),
+        "label": "近1季"
     }
     
     return result
@@ -273,7 +290,12 @@ def get_data_summary():
 
 if __name__ == "__main__":
     # 测试代码
-    print("数据存储模块测试 (v2 - 时段分离版)")
+    print("数据存储模块测试 (v3 - 按天对比版)")
     print(f"数据文件: {DATA_FILE}")
     print(f"数据汇总: {get_data_summary()}")
-    print(f"最近记录: {get_latest_records(3)}")
+    
+    # 测试多维度对比
+    session = get_current_session()
+    print(f"当前时段: {session}")
+    changes = get_multi_period_changes(46.5, session)
+    print(f"多维度对比: {changes}")

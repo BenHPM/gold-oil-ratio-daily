@@ -169,11 +169,11 @@ def generate_report(gold_price, oil_price, gold_chg, oil_chg, multi_period_data)
         ratio_comment = "金油比偏低，经济过热或通胀预期强，原油需求旺盛"
         header_color = "green"
 
-    # 构建多维度对比行（基于时段）
-    period_1s = multi_period_data.get("1s", {})
-    period_7s = multi_period_data.get("7s", {})
-    period_20s = multi_period_data.get("20s", {})
-    period_60s = multi_period_data.get("60s", {})
+    # 构建多维度对比行（按天对比）
+    period_1d = multi_period_data.get("1d", {})
+    period_7d = multi_period_data.get("7d", {})
+    period_1m = multi_period_data.get("1m", {})
+    period_1q = multi_period_data.get("1q", {})
 
     # ========== 飞书 interactive 卡片消息 (v7 新版) ==========
     card = {
@@ -245,28 +245,28 @@ def generate_report(gold_price, oil_price, gold_chg, oil_chg, multi_period_data)
                         "is_short": True,
                         "text": {
                             "tag": "lark_md",
-                            "content": f"**上一时段**\n{format_change_with_symbol(period_1s)}"
+                            "content": f"**昨日**\n{format_change_with_symbol(period_1d)}"
                         }
                     },
                     {
                         "is_short": True,
                         "text": {
                             "tag": "lark_md",
-                            "content": f"**近7时段**\n{format_change_with_symbol(period_7s)}"
+                            "content": f"**近7天**\n{format_change_with_symbol(period_7d)}"
                         }
                     },
                     {
                         "is_short": True,
                         "text": {
                             "tag": "lark_md",
-                            "content": f"**近半月**\n{format_change_with_symbol(period_20s)}"
+                            "content": f"**近1月**\n{format_change_with_symbol(period_1m)}"
                         }
                     },
                     {
                         "is_short": True,
                         "text": {
                             "tag": "lark_md",
-                            "content": f"**近1月**\n{format_change_with_symbol(period_60s)}"
+                            "content": f"**近1季**\n{format_change_with_symbol(period_1q)}"
                         }
                     }
                 ]
@@ -309,10 +309,10 @@ def generate_report(gold_price, oil_price, gold_chg, oil_chg, multi_period_data)
         f"🛢️ 布伦特原油: {oil_price:.2f} USD/桶 {oil_chg_str}\n\n"
         f"🎯 金油比: {ratio:.2f}（{ratio_level}）\n\n"
         f"📊 数据对比:\n"
-        f"  上一时段: {format_change_with_symbol(period_1s)}\n"
-        f"  近7时段: {format_change_with_symbol(period_7s)}\n"
-        f"  近半月: {format_change_with_symbol(period_20s)}\n"
-        f"  近1月: {format_change_with_symbol(period_60s)}\n\n"
+        f"  昨日: {format_change_with_symbol(period_1d)}\n"
+        f"  近7天: {format_change_with_symbol(period_7d)}\n"
+        f"  近1月: {format_change_with_symbol(period_1m)}\n"
+        f"  近1季: {format_change_with_symbol(period_1q)}\n\n"
         f"💡 {ratio_comment}\n\n"
         f"⚠️ 仅供研究参考"
     )
@@ -453,8 +453,12 @@ class FeishuPusher:
 # 主程序
 # =====================================================
 
-def run_daily_report():
-    """执行每日报告主流程"""
+def run_daily_report(manual_session=None):
+    """执行每日报告主流程
+    
+    参数:
+        manual_session: 手动指定时段（用于测试），None则自动判断
+    """
     now = datetime.now(CST)
 
     print("=" * 65)
@@ -462,9 +466,13 @@ def run_daily_report():
     print(f"  {now.strftime('%Y-%m-%d %A')} | {now.strftime('%H:%M:%S')} CST")
     print("=" * 65)
 
-    # 获取当前时段
-    session = get_current_session()
-    print(f"  当前时段: {session}")
+    # 获取时段（优先使用手动指定，否则自动判断）
+    if manual_session:
+        session = manual_session
+        print(f"  手动指定时段: {session}")
+    else:
+        session = get_current_session()
+        print(f"  当前时段: {session}")
 
     # 获取实时数据
     print("\n[1/4] 获取实时行情...")
@@ -490,7 +498,7 @@ def run_daily_report():
     print("\n[3/4] 计算数据对比...")
     multi_period_data = get_multi_period_changes(ratio)
     
-    print("  时段对比涨跌幅:")
+    print("  数据对比涨跌幅:")
     for period, data in multi_period_data.items():
         symbol = data.get('symbol', '❓')
         change = data.get('change')
@@ -550,5 +558,14 @@ def run_daily_report():
 
 
 if __name__ == "__main__":
-    success = run_daily_report()
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='金油比日报系统')
+    parser.add_argument('--session', '-s', 
+                       choices=['亚盘收盘', '美盘收盘'],
+                       help='手动指定时段（用于测试），不指定则根据当前时间自动判断')
+    
+    args = parser.parse_args()
+    
+    success = run_daily_report(manual_session=args.session)
     sys.exit(0 if success else 1)
