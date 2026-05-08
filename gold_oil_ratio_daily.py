@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-金油比日报 - GitHub Actions 云端版 (v6)
+金油比日报 - GitHub Actions 云端版 (v7)
 - 数据源: TradingEconomics (伦敦金现 + 布伦特原油)
 - 推送方式: 飞书官方API (Interactive卡片)
 - 时段标签: 自动识别亚盘收盘/美盘收盘/欧盘时段
+- 多维度对比: 昨日/近5日/近1月/近1季度涨跌
 - 凭证: 从环境变量读取，不硬编码
 """
 
@@ -15,6 +16,15 @@ import sys
 import os
 import re
 from datetime import datetime, timezone, timedelta
+
+# 导入数据存储模块
+from data_store import (
+    add_record, 
+    get_multi_period_changes, 
+    get_data_summary,
+    get_change_symbol,
+    get_current_session
+)
 
 # ==================== 配置区 ====================
 
@@ -30,13 +40,9 @@ FEISHU_APP_ID = os.environ.get("FEISHU_APP_ID", "")
 FEISHU_APP_SECRET = os.environ.get("FEISHU_APP_SECRET", "")
 FEISHU_BASE_URL = "https://open.feishu.cn/open-apis"
 
-# 历史对照数据（1971年）
-HISTORICAL_YEAR = 1971
-HISTORICAL_GOLD = 35       # $35/盎司
-HISTORICAL_OIL_MIN = 5    # $5/桶
-HISTORICAL_OIL_MAX = 7    # $7/桶
-HISTORICAL_RATIO_MIN = 5  # 7:1
-HISTORICAL_RATIO_MAX = 7  # 5:1
+# 历史常态区间（1970年至今）- 用于分析要点参考
+HISTORICAL_RATIO_MIN = 10
+HISTORICAL_RATIO_MAX = 25
 
 # 重试配置
 MAX_RETRIES = 3
@@ -119,23 +125,19 @@ def calculate_ratio(gold, oil):
     return round(gold / oil, 2)
 
 
-def get_session_label():
-    """根据当前北京时间判断推送时段标签"""
-    now_cst = datetime.now(CST)
-    hour = now_cst.hour
-    if 0 <= hour < 12:
-        return "美盘收盘"
-    elif 12 <= hour < 18:
-        return "亚盘收盘"
-    else:
-        return "欧盘时段"
+def format_change_with_symbol(change_data):
+    """格式化涨跌幅显示，带符号"""
+    if change_data["change"] is None:
+        return f"{change_data['symbol']} --"
+    sign = "+" if change_data["change"] > 0 else ""
+    return f"{change_data['symbol']} {sign}{change_data['change']:.2f}%"
 
 
-def generate_report(gold_price, oil_price, gold_chg, oil_chg):
-    """生成金油比日报内容"""
+def generate_report(gold_price, oil_price, gold_chg, oil_chg, multi_period_data):
+    """生成金油比日报内容（v7 新版卡片）"""
     now = datetime.now(CST)
     ratio = calculate_ratio(gold_price, oil_price)
-    session = get_session_label()
+    session = get_current_session()
 
     # 涨跌幅字符串
     gold_chg_str = f"({gold_chg:+.2f}%)" if gold_chg is not None else ""
@@ -145,27 +147,41 @@ def generate_report(gold_price, oil_price, gold_chg, oil_chg):
     gold_arrow = "🔴" if gold_chg is not None and gold_chg >= 0 else "🟢"
     oil_arrow = "🔴" if oil_chg is not None and oil_chg >= 0 else "🟢"
 
-    # 判断金油比水平
-    if ratio > 25:
+    # 判断金油比水平（5级判定体系，基于1970年至今历史数据）
+    if ratio > 50:
+        ratio_level = "极端"
+        ratio_comment = "金油比极端异常，市场严重分化，历史罕见危机信号"
+        header_color = "purple"
+    elif ratio > 35:
         ratio_level = "极高"
-        ratio_comment = "金油比偏高反映市场避险情绪升温、对经济前景的担忧或通胀预期上升"
+        ratio_comment = "金油比极高，通常预示重大危机，经济衰退风险显著增加"
         header_color = "red"
-    elif ratio > 15:
+    elif ratio > 25:
         ratio_level = "偏高"
-        ratio_comment = "金油比偏高，需关注经济下行风险和避险情绪变化"
+        ratio_comment = "金油比偏高，市场避险情绪升温，需关注经济下行风险"
         header_color = "orange"
-    else:
+    elif ratio >= 10:
         ratio_level = "适中"
-        ratio_comment = "金油比处于相对正常区间"
+        ratio_comment = "金油比处于历史常态区间，经济运行相对稳定"
         header_color = "blue"
+    else:
+        ratio_level = "偏低"
+        ratio_comment = "金油比偏低，经济过热或通胀预期强，原油需求旺盛"
+        header_color = "green"
 
-    # ========== 飞书 interactive 卡片消息 ==========
+    # 构建多维度对比行（基于时段）
+    period_1s = multi_period_data.get("1s", {})
+    period_7s = multi_period_data.get("7s", {})
+    period_20s = multi_period_data.get("20s", {})
+    period_60s = multi_period_data.get("60s", {})
+
+    # ========== 飞书 interactive 卡片消息 (v7 新版) ==========
     card = {
         "config": {"wide_screen_mode": True},
         "header": {
             "title": {
                 "tag": "plain_text",
-                "content": f"金油比日报 | {session}"
+                "content": f"📊 金油比日报 | {session}"
             },
             "template": header_color
         },
@@ -175,19 +191,19 @@ def generate_report(gold_price, oil_price, gold_chg, oil_chg):
                 "tag": "div",
                 "text": {
                     "tag": "lark_md",
-                    "content": f"**日期**：{now.strftime('%Y-%m-%d')} ｜ **更新**：{now.strftime('%H:%M:%S')}"
+                    "content": f"**{now.strftime('%Y年%m月%d日')}** ｜ 更新 {now.strftime('%H:%M')}"
                 }
             },
             {"tag": "hr"},
+            
             # 当前行情 - 黄金
             {
                 "tag": "div",
                 "text": {
                     "tag": "lark_md",
                     "content": (
-                        f"🥇 **伦敦金现 (XAU)**\n"
-                        f"收盘价：**{gold_price:.2f}** USD/盎司　{gold_arrow} {gold_chg_str}\n"
-                        f"数据源：[Trading Economics]({GOLD_SOURCE_URL})"
+                        f"🥇 **伦敦金现：**{gold_price:.2f} USD/盎司  {gold_arrow} {gold_chg_str}\n"
+                        f"<font color='grey'>数据源: [Trading Economics]({GOLD_SOURCE_URL})</font>"
                     )
                 }
             },
@@ -197,57 +213,87 @@ def generate_report(gold_price, oil_price, gold_chg, oil_chg):
                 "text": {
                     "tag": "lark_md",
                     "content": (
-                        f"🛢️ **布伦特原油 (Brent)**\n"
-                        f"收盘价：**{oil_price:.2f}** USD/桶　{oil_arrow} {oil_chg_str}\n"
-                        f"数据源：[Trading Economics]({OIL_SOURCE_URL})"
+                        f"🛢️ **布伦特原油：**{oil_price:.2f} USD/桶  {oil_arrow} {oil_chg_str}\n"
+                        f"<font color='grey'>数据源: [Trading Economics]({OIL_SOURCE_URL})</font>"
                     )
                 }
             },
             {"tag": "hr"},
-            # 金油比
+            
+            # 金油比主数值 + 水平判断
             {
                 "tag": "div",
                 "text": {
                     "tag": "lark_md",
-                    "content": f"**金油比：{ratio:.2f}**（{ratio_level}）\n计算：{gold_price:.2f} / {oil_price:.2f}"
+                    "content": f"**🎯 金油比：<font color='{header_color}'>{ratio:.2f}</font>**（{gold_price:.2f}/{oil_price:.2f}）"
                 }
             },
             {"tag": "hr"},
-            # 历史对照
+            
+            # 多维度对比（核心新功能）
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": "**📊 数据对比**"
+                }
+            },
+            {
+                "tag": "div",
+                "fields": [
+                    {
+                        "is_short": True,
+                        "text": {
+                            "tag": "lark_md",
+                            "content": f"**上一时段**\n{format_change_with_symbol(period_1s)}"
+                        }
+                    },
+                    {
+                        "is_short": True,
+                        "text": {
+                            "tag": "lark_md",
+                            "content": f"**近7时段**\n{format_change_with_symbol(period_7s)}"
+                        }
+                    },
+                    {
+                        "is_short": True,
+                        "text": {
+                            "tag": "lark_md",
+                            "content": f"**近半月**\n{format_change_with_symbol(period_20s)}"
+                        }
+                    },
+                    {
+                        "is_short": True,
+                        "text": {
+                            "tag": "lark_md",
+                            "content": f"**近1月**\n{format_change_with_symbol(period_60s)}"
+                        }
+                    }
+                ]
+            },
+            {"tag": "hr"},
+            
+            # 分析要点（融合历史对照）
             {
                 "tag": "div",
                 "text": {
                     "tag": "lark_md",
                     "content": (
-                        f"**【历史对照】{HISTORICAL_YEAR}年基准数据**\n"
-                        f"黄金价格：${HISTORICAL_GOLD}/盎司\n"
-                        f"石油价格：${HISTORICAL_OIL_MIN}~${HISTORICAL_OIL_MAX}/桶\n"
-                        f"金油比区间：{HISTORICAL_RATIO_MIN}:1 ~ {HISTORICAL_RATIO_MAX}:1"
-                    )
-                }
-            },
-            {"tag": "hr"},
-            # 分析要点
-            {
-                "tag": "div",
-                "text": {
-                    "tag": "lark_md",
-                    "content": (
-                        f"**【分析要点】**\n"
-                        f"当前金油比为 **{ratio:.2f}**，{ratio_level}于{HISTORICAL_YEAR}年基准区间"
-                        f"（{HISTORICAL_RATIO_MIN}:1~{HISTORICAL_RATIO_MAX}:1）。\n"
+                        f"**💡 分析要点**\n"
+                        f"当前金油比 **<font color='{header_color}'>{ratio:.2f}</font>** {ratio_level}于历史常态区间（{HISTORICAL_RATIO_MIN}:1~{HISTORICAL_RATIO_MAX}:1）。"
                         f"{ratio_comment}。\n"
-                        f"历史经验：金油比超过20通常预示经济衰退风险增加。"
+                        f"历史经验：金油比突破25通常预示危机，超过35则预示重大危机。"
                     )
                 }
             },
+            
             # 数据来源备注
             {
                 "tag": "note",
                 "elements": [
                     {
                         "tag": "plain_text",
-                        "content": "数据来源：TradingEconomics (实时) ｜ 仅供研究参考，不构成投资建议"
+                        "content": "⚠️ 数据来源：TradingEconomics (实时) ｜ 仅供研究参考，不构成投资建议"
                     }
                 ]
             }
@@ -257,15 +303,18 @@ def generate_report(gold_price, oil_price, gold_chg, oil_chg):
 
     # 飞书降级纯文本（卡片发送失败时使用）
     feishu_fallback = (
-        f"金油比日报 | {session}\n\n"
-        f"日期：{now.strftime('%Y-%m-%d')} ｜ 更新：{now.strftime('%H:%M:%S')}\n\n"
-        f"伦敦金现 (XAU): {gold_price:.2f} USD/盎司 {gold_chg_str}\n"
-        f"布伦特原油 (Brent): {oil_price:.2f} USD/桶 {oil_chg_str}\n\n"
-        f"金油比: {ratio:.2f}（{ratio_level}）\n"
-        f"计算: {gold_price:.2f} / {oil_price:.2f}\n\n"
-        f"历史对照({HISTORICAL_YEAR}年): 黄金${HISTORICAL_GOLD}/盎司, 石油${HISTORICAL_OIL_MIN}~${HISTORICAL_OIL_MAX}/桶, "
-        f"金油比{HISTORICAL_RATIO_MIN}:1~{HISTORICAL_RATIO_MAX}:1\n\n"
-        f"数据来源：TradingEconomics (实时) ｜ 仅供研究参考"
+        f"📊 金油比日报 | {session}\n"
+        f"{now.strftime('%Y-%m-%d %H:%M')}\n\n"
+        f"🥇 伦敦金现: {gold_price:.2f} USD/盎司 {gold_chg_str}\n"
+        f"🛢️ 布伦特原油: {oil_price:.2f} USD/桶 {oil_chg_str}\n\n"
+        f"🎯 金油比: {ratio:.2f}（{ratio_level}）\n\n"
+        f"📊 数据对比:\n"
+        f"  上一时段: {format_change_with_symbol(period_1s)}\n"
+        f"  近7时段: {format_change_with_symbol(period_7s)}\n"
+        f"  近半月: {format_change_with_symbol(period_20s)}\n"
+        f"  近1月: {format_change_with_symbol(period_60s)}\n\n"
+        f"💡 {ratio_comment}\n\n"
+        f"⚠️ 仅供研究参考"
     )
 
     return {
@@ -274,7 +323,8 @@ def generate_report(gold_price, oil_price, gold_chg, oil_chg):
         'ratio': ratio,
         'date': now.strftime('%Y-%m-%d'),
         'time': now.strftime('%H:%M:%S'),
-        'session': session
+        'session': session,
+        'multi_period': multi_period_data
     }
 
 
@@ -408,12 +458,16 @@ def run_daily_report():
     now = datetime.now(CST)
 
     print("=" * 65)
-    print(f"  金油比日报系统 (GitHub Actions + 飞书推送)")
+    print(f"  金油比日报系统 v7 (GitHub Actions + 飞书推送)")
     print(f"  {now.strftime('%Y-%m-%d %A')} | {now.strftime('%H:%M:%S')} CST")
     print("=" * 65)
 
+    # 获取当前时段
+    session = get_current_session()
+    print(f"  当前时段: {session}")
+
     # 获取实时数据
-    print("\n[1/3] 获取实时行情...")
+    print("\n[1/4] 获取实时行情...")
     gold_price, oil_price, gold_chg, oil_chg = get_realtime_prices()
 
     if gold_price is None or oil_price is None:
@@ -426,17 +480,36 @@ def run_daily_report():
     print(f"    伦敦金现: {gold_price} USD/盎司")
     print(f"    布伦特原油: {oil_price} USD/桶")
     print(f"    金油比: {ratio}")
-    print(f"    历史基准({HISTORICAL_YEAR}年): {HISTORICAL_GOLD}/{HISTORICAL_OIL_MIN}-{HISTORICAL_OIL_MAX}, 比{HISTORICAL_RATIO_MIN}:{HISTORICAL_RATIO_MAX}")
+
+    # 保存数据到本地（传入时段参数）
+    print("\n[2/4] 保存历史数据...")
+    add_record(gold_price, oil_price, ratio, session)
+    print(f"  数据汇总: {get_data_summary()}")
+
+    # 计算多维度对比数据
+    print("\n[3/4] 计算数据对比...")
+    multi_period_data = get_multi_period_changes(ratio)
+    
+    print("  时段对比涨跌幅:")
+    for period, data in multi_period_data.items():
+        symbol = data.get('symbol', '❓')
+        change = data.get('change')
+        label = data.get('label', period)
+        if change is not None:
+            sign = "+" if change > 0 else ""
+            print(f"    {label}: {symbol} {sign}{change:.2f}%")
+        else:
+            print(f"    {label}: {symbol} --")
 
     # 生成日报
-    print("\n  生成日报内容...")
-    report = generate_report(gold_price, oil_price, gold_chg, oil_chg)
+    print("\n[4/4] 生成日报并推送...")
+    report = generate_report(gold_price, oil_price, gold_chg, oil_chg, multi_period_data)
 
     results = {}
 
     # 推送到飞书（官方API）
     print("\n" + "-" * 55)
-    print("[2/3] 推送至飞书...")
+    print("推送至飞书...")
 
     feishu = FeishuPusher()
     if feishu.get_token():
@@ -468,9 +541,9 @@ def run_daily_report():
     elif partial:
         print("\n  部分推送成功，请检查")
     else:
-        print("\n  推送失败")
+        print("\n  推送失败（可能是凭证未配置）")
 
-    print(f"\n  金油比: {ratio:.2f} (历史基准: {HISTORICAL_RATIO_MIN}~{HISTORICAL_RATIO_MAX})")
+    print(f"\n  金油比: {ratio:.2f}")
     print("=" * 65)
 
     return all_success or partial
