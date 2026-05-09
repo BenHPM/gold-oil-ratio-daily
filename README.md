@@ -79,8 +79,12 @@
 |:------------|:-----|:---------|
 | `FEISHU_APP_ID` | 飞书应用的 App ID | 飞书开放平台 → 应用凭证 |
 | `FEISHU_APP_SECRET` | 飞书应用的 App Secret | 飞书开放平台 → 应用凭证 |
+| `DATA_ENCRYPT_KEY` | 数据加密密钥 | 自定义一个强密码（建议 16 位以上随机字符串） |
+| `PUSH_TOKEN` | Git 推送 Token | GitHub Settings → Developer settings → Personal access tokens → 勾选 `repo` 权限 |
 
 > ⚠️ 凭证存储在 GitHub Secrets 中，不会泄露。代码中不包含任何敏感信息。
+> 
+> **首次部署必须配置 `DATA_ENCRYPT_KEY` 和 `PUSH_TOKEN`**，否则 Actions 无法持久化数据。
 
 ### 3. 手动触发测试
 
@@ -136,8 +140,9 @@ gold-oil-ratio-daily/
 │   └── workflows/
 │       └── daily-report.yml      # GitHub Actions 定时任务配置
 ├── gold_oil_ratio_daily.py       # 主程序脚本（数据获取 + 卡片生成 + 飞书推送）
-├── data_store.py                 # 数据存储模块（时段分离 + 多维度对比计算）
-├── gold_oil_data.json            # 历史数据文件（自动生成，已加入 .gitignore）
+├── data_store.py                 # 数据存储模块（加密持久化 + 多维度对比计算）
+├── gold_oil_data.enc             # 加密数据文件（自动生成，提交到仓库）
+├── gold_oil_data.json            # 明文数据文件（本地开发用，已加入 .gitignore）
 ├── requirements.txt              # Python 依赖（requests）
 ├── .gitignore                    # Git 忽略规则
 └── README.md                     # 项目文档
@@ -158,34 +163,30 @@ gold-oil-ratio-daily/
 
 ### 数据存储说明
 
-数据按 **日期 + 时段** 分离存储，同一天可保留亚盘收盘和美盘收盘两条记录：
+数据按 **日期 + 时段** 分离存储，同一天可保留亚盘收盘和美盘收盘两条记录。
 
-```json
-{
-  "records": [
-    {
-      "date": "2026-05-08",
-      "session": "亚盘收盘",
-      "gold_price": 4720.0,
-      "oil_price": 101.5,
-      "ratio": 46.50,
-      "created_at": "2026-05-08T15:00:00+08:00"
-    },
-    {
-      "date": "2026-05-08",
-      "session": "美盘收盘",
-      "gold_price": 4718.0,
-      "oil_price": 101.1,
-      "ratio": 46.67,
-      "created_at": "2026-05-08T06:00:00+08:00"
-    }
-  ]
-}
+**存储方式**：
+- **GitHub Actions 环境**：加密存储为 `gold_oil_data.enc`，每次运行后自动提交到仓库
+- **本地开发环境**：明文存储为 `gold_oil_data.json`（通过环境变量 `DATA_ENCRYPT_KEY` 切换）
+
+**加密机制**：
+- 使用 PBKDF2 + XOR + Base64 加密，密钥存储在 GitHub Secrets 中
+- 仓库中的 `.enc` 文件为加密后的乱码，他人无法读取
+- 本地开发时设置 `DATA_ENCRYPT_KEY` 环境变量即可解密
+
+```bash
+# 本地解密查看数据
+export DATA_ENCRYPT_KEY="your_encrypt_key"
+python -c "
+from data_store import load_data
+import json
+print(json.dumps(load_data(), ensure_ascii=False, indent=2))
+"
 ```
 
 - 同一日期 + 同一时段多次运行会**更新**，不会重复
 - 自动保留最近 240 条记录（约 4 个月）
-- `gold_oil_data.json` 已加入 `.gitignore`，不会提交到仓库
+- `gold_oil_data.json` 已加入 `.gitignore`，不会提交明文数据
 
 ### 数据对比维度
 
