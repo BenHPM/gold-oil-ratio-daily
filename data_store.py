@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-金油比数据存储模块 (v4 - 加密持久化版)
+金油比数据存储模块 (v5 - AES-256-GCM 加密版)
 - 持久化每日金油比数据，按日期+时段存储
 - 数据对比按时段类型分别计算（亚盘对比亚盘，美盘对比美盘）
-- 支持加密存储（AES-256），密钥通过环境变量 DATA_ENCRYPT_KEY 传入
+- AES-256-GCM + 随机盐值加密，密钥通过环境变量 DATA_ENCRYPT_KEY 传入
 - 无密钥时退化为明文存储（本地开发兼容）
+- 数据维度严格按实际天数判定，不足则不显示
 """
 
 import json
@@ -29,49 +30,54 @@ VALID_SESSIONS = ["亚盘收盘", "美盘收盘"]
 ENCRYPT_KEY = os.environ.get("DATA_ENCRYPT_KEY", "")
 
 
-# ==================== 加密/解密模块 ====================
+# ==================== AES-256-GCM 加密/解密模块 ====================
 
-def _derive_key(password: str, salt: bytes = b'gold_oil_ratio_salt') -> bytes:
-    """从密码派生 32 字节 AES 密钥"""
+def _derive_key(password: str, salt: bytes) -> bytes:
+    """从密码 + 随机盐值派生 256 位 AES 密钥"""
     return hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt, 100000, dklen=32)
-
-
-def _xor_encrypt(data: bytes, key: bytes) -> bytes:
-    """XOR 加密（配合 base64 编码存储）"""
-    return bytes(a ^ key[i % len(key)] for i, a in enumerate(data))
 
 
 def encrypt_data(data: dict) -> bytes:
     """
-    加密数据为字节流
+    使用 AES-256-GCM 加密数据
     
-    参数:
-        data: Python 字典
-    
-    返回:
-        加密后的字节流
+    格式: Base64( salt(16) + nonce(12) + ciphertext + tag(16) )
     """
-    json_str = json.dumps(data, ensure_ascii=False)
-    json_bytes = json_str.encode('utf-8')
-    key = _derive_key(ENCRYPT_KEY)
-    encrypted = _xor_encrypt(json_bytes, key)
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    
+    json_bytes = json.dumps(data, ensure_ascii=False).encode('utf-8')
+    
+    # 每次加密使用随机盐值和随机 nonce
+    salt = os.urandom(16)
+    key = _derive_key(ENCRYPT_KEY, salt)
+    nonce = os.urandom(12)
+    
+    aesgcm = AESGCM(key)
+    ciphertext_with_tag = aesgcm.encrypt(nonce, json_bytes, None)
+    
+    # 拼接: salt + nonce + ciphertext(含tag)
+    encrypted = salt + nonce + ciphertext_with_tag
     return base64.b64encode(encrypted)
 
 
 def decrypt_data(encrypted_bytes: bytes) -> dict:
     """
-    解密字节流为数据字典
-    
-    参数:
-        encrypted_bytes: 加密后的字节流
-    
-    返回:
-        Python 字典
+    使用 AES-256-GCM 解密数据
     """
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    
     encrypted = base64.b64decode(encrypted_bytes)
-    key = _derive_key(ENCRYPT_KEY)
-    decrypted = _xor_encrypt(encrypted, key)
-    return json.loads(decrypted.decode('utf-8'))
+    
+    # 提取各部分
+    salt = encrypted[:16]
+    nonce = encrypted[16:28]
+    ciphertext_with_tag = encrypted[28:]
+    
+    key = _derive_key(ENCRYPT_KEY, salt)
+    
+    aesgcm = AESGCM(key)
+    json_bytes = aesgcm.decrypt(nonce, ciphertext_with_tag, None)
+    return json.loads(json_bytes.decode('utf-8'))
 
 
 def is_encryption_enabled():
@@ -95,7 +101,7 @@ def load_data():
                 with open(DATA_FILE_ENCRYPTED, 'rb') as f:
                     encrypted_bytes = f.read()
                 data = decrypt_data(encrypted_bytes)
-                print(f"  加载数据成功（加密模式，{len(data.get('records', []))} 条记录）")
+                print(f"  加载数据成功（AES-256-GCM，{len(data.get('records', []))} 条记录）")
                 return data
             except Exception as e:
                 print(f"  解密数据失败: {e}")
@@ -124,11 +130,11 @@ def save_data(data):
             encrypted_bytes = encrypt_data(data)
             with open(DATA_FILE_ENCRYPTED, 'wb') as f:
                 f.write(encrypted_bytes)
-            print(f"  数据已保存（加密模式）")
+            print(f"  数据已保存（AES-256-GCM 加密，{len(data.get('records', []))} 条记录）")
         else:
             with open(DATA_FILE, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-            print(f"  数据已保存（明文模式）")
+            print(f"  数据已保存（明文模式，{len(data.get('records', []))} 条记录）")
         return True
     except Exception as e:
         print(f"  保存数据失败: {e}")
@@ -149,6 +155,7 @@ def add_record(gold_price, oil_price, ratio, session=None):
         - 按 date + session 作为唯一键
         - 同一日期+时段多次运行会更新，不会重复
         - 同一天可存储多条不同时段的记录
+        - 不限制总记录数，永久保存所有历史数据
     """
     data = load_data()
     today = get_today_str()
@@ -179,8 +186,8 @@ def add_record(gold_price, oil_price, ratio, session=None):
             "created_at": now
         })
     
-    # 按日期排序，保留最近 240 条记录（约 4 个月，每天最多 2 条）
-    data["records"] = sorted(data["records"], key=lambda x: (x["date"], x.get("session", "")))[-240:]
+    # 按日期排序（不限制条数）
+    data["records"] = sorted(data["records"], key=lambda x: (x["date"], x.get("session", "")))
     
     save_data(data)
     return True
@@ -202,7 +209,7 @@ def get_current_session():
 
 def get_records_by_session(session, cached_data=None):
     """
-    获取指定时段的所有记录（按日期倒序）
+    获取指定时段的所有记录（按日期倒序，每天只保留一条）
     
     参数:
         session: 时段类型（亚盘收盘/美盘收盘）
@@ -253,7 +260,7 @@ def get_n_days_avg_ratio(session, n_days, cached_data=None):
         n_days: 天数
         cached_data: 可选的缓存数据
     
-    返回: 近 n 天的平均金油比，如果数据不足则返回 None
+    返回: 近 n 天的平均金油比，如果数据天数不足则返回 None
     """
     records = get_records_by_session(session, cached_data)
     today = get_today_str()
@@ -261,7 +268,8 @@ def get_n_days_avg_ratio(session, n_days, cached_data=None):
     # 排除今天，取近 n 天
     past_records = [r for r in records if r["date"] < today][:n_days]
     
-    if not past_records:
+    # 数据天数不足时不计算，避免误导
+    if len(past_records) < n_days:
         return None
     
     avg_ratio = sum(r["ratio"] for r in past_records) / len(past_records)
@@ -279,11 +287,11 @@ def get_multi_period_changes(current_ratio, session=None):
     """
     获取多时间维度涨跌幅（按天对比，同类型时段）
     
-    对比维度:
-        - 昨日: 同类型时段的昨天数据
-        - 近7天: 同类型时段的近7天平均
-        - 近1月: 同类型时段的近30天平均
-        - 近1季: 同类型时段的近90天平均
+    对比维度（严格按实际天数判定）:
+        - 昨日: 需要 ≥ 1 条历史记录
+        - 近7天: 需要 ≥ 7 条历史记录
+        - 近1月: 需要 ≥ 30 条历史记录
+        - 近1季: 需要 ≥ 90 条历史记录
     
     返回: {
         "1d": {"ratio": x, "change": y, "symbol": "📈/📉", "label": "昨日"},
@@ -311,7 +319,7 @@ def get_multi_period_changes(current_ratio, session=None):
         "label": "昨日"
     }
     
-    # 2. 近7天平均对比
+    # 2. 近7天平均对比（需要 ≥ 7 天数据）
     avg_7d = get_n_days_avg_ratio(session, 7, cached_data)
     change = calculate_change_percent(current_ratio, avg_7d)
     result["7d"] = {
@@ -321,7 +329,7 @@ def get_multi_period_changes(current_ratio, session=None):
         "label": "近7天"
     }
     
-    # 3. 近1月平均对比（30天）
+    # 3. 近1月平均对比（需要 ≥ 30 天数据）
     avg_1m = get_n_days_avg_ratio(session, 30, cached_data)
     change = calculate_change_percent(current_ratio, avg_1m)
     result["1m"] = {
@@ -331,7 +339,7 @@ def get_multi_period_changes(current_ratio, session=None):
         "label": "近1月"
     }
     
-    # 4. 近1季平均对比（90天）
+    # 4. 近1季平均对比（需要 ≥ 90 天数据）
     avg_1q = get_n_days_avg_ratio(session, 90, cached_data)
     change = calculate_change_percent(current_ratio, avg_1q)
     result["1q"] = {
@@ -385,10 +393,10 @@ def get_data_summary():
 
 if __name__ == "__main__":
     # 测试代码
-    print("数据存储模块测试 (v4 - 加密持久化版)")
+    print("数据存储模块测试 (v5 - AES-256-GCM 加密版)")
     print(f"数据文件: {DATA_FILE}")
     print(f"加密文件: {DATA_FILE_ENCRYPTED}")
-    print(f"加密模式: {'启用' if is_encryption_enabled() else '未启用'}")
+    print(f"加密模式: {'AES-256-GCM' if is_encryption_enabled() else '未启用'}")
     print(f"数据汇总: {get_data_summary()}")
     
     # 测试多维度对比

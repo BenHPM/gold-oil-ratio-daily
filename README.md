@@ -170,8 +170,8 @@ gold-oil-ratio-daily/
 - **本地开发环境**：明文存储为 `gold_oil_data.json`（通过环境变量 `DATA_ENCRYPT_KEY` 切换）
 
 **加密机制**：
-- 使用 PBKDF2 + XOR + Base64 加密，密钥存储在 GitHub Secrets 中
-- 仓库中的 `.enc` 文件为加密后的乱码，他人无法读取
+- 使用 **AES-256-GCM** + 随机盐值加密（每次加密用不同盐值）
+- 密钥存储在 GitHub Secrets 中，仓库中的 `.enc` 文件他人无法读取
 - 本地开发时设置 `DATA_ENCRYPT_KEY` 环境变量即可解密
 
 ```bash
@@ -185,7 +185,7 @@ print(json.dumps(load_data(), ensure_ascii=False, indent=2))
 ```
 
 - 同一日期 + 同一时段多次运行会**更新**，不会重复
-- 自动保留最近 240 条记录（约 4 个月）
+- 不限制总记录数，永久保存所有历史数据
 - `gold_oil_data.json` 已加入 `.gitignore`，不会提交明文数据
 
 ### 数据对比维度
@@ -197,7 +197,7 @@ print(json.dumps(load_data(), ensure_ascii=False, indent=2))
 | 近 1 月 | 与近 30 天同类型时段平均值对比 | 第 30 天 |
 | 近 1 季 | 与近 90 天同类型时段平均值对比 | 第 90 天 |
 
-> **对比逻辑**：亚盘收盘只对比亚盘收盘数据，美盘收盘只对比美盘收盘数据，避免跨时段比较导致偏差。
+> **数据维度严格按实际天数判定**：历史数据天数不足该维度要求时，显示 ❓ --，不计算具体数值，避免误导。
 
 ## 常见问题
 
