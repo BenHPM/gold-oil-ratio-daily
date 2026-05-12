@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-贵金属日报 - GitHub Actions 云端版 (v8)
+金油银哨兵 - GitHub Actions 云端版 (v8)
 - 数据源: TradingEconomics (伦敦金现 + 布伦特原油 + 伦敦银现)
 - 推送方式: 飞书官方API (Interactive卡片)
 - 时段标签: 自动识别亚盘收盘/美盘收盘/欧盘时段
@@ -179,7 +179,7 @@ def format_change_with_symbol(change_data):
 
 def generate_report(gold_price, oil_price, gold_chg, oil_chg, silver_price, silver_chg,
                     multi_period_data, gs_multi_period_data):
-    """生成贵金属日报内容（v8 合并卡片，含金油比+金银比）"""
+    """生成金油银哨兵内容（v8 合并卡片，含金油比+金银比）"""
     now = datetime.now(CST)
     ratio = calculate_ratio(gold_price, oil_price)
     gs_ratio = calculate_gs_ratio(gold_price, silver_price)
@@ -258,7 +258,7 @@ def generate_report(gold_price, oil_price, gold_chg, oil_chg, silver_price, silv
         "header": {
             "title": {
                 "tag": "plain_text",
-                "content": f"📊 贵金属日报 | {session}"
+                "content": f"📊 金油银哨兵 | {session}"
             },
             "template": header_color
         },
@@ -417,7 +417,7 @@ def generate_report(gold_price, oil_price, gold_chg, oil_chg, silver_price, silv
 
     # 飞书降级纯文本（卡片发送失败时使用）
     feishu_fallback = (
-        f"📊 贵金属日报 | {session}\n"
+        f"📊 金油银哨兵 | {session}\n"
         f"{now.strftime('%Y-%m-%d %H:%M')}\n\n"
         f"🥇 伦敦金现: {gold_price:.2f} USD/盎司 {gold_chg_str}\n"
         f"🛢️ 布伦特原油: {oil_price:.2f} USD/桶 {oil_chg_str}\n"
@@ -577,7 +577,7 @@ class FeishuPusher:
 # =====================================================
 
 def run_daily_report(manual_session=None):
-    """执行每日报告主流程（v8 贵金属日报，含金油比+金银比）
+    """执行每日报告主流程（v8 金油银哨兵，含金油比+金银比）
     
     参数:
         manual_session: 手动指定时段（用于测试），None则自动判断
@@ -585,7 +585,7 @@ def run_daily_report(manual_session=None):
     now = datetime.now(CST)
 
     print("=" * 65)
-    print(f"  贵金属日报系统 v8 (GitHub Actions + 飞书推送)")
+    print(f"  金油银哨兵 v8 (GitHub Actions + 飞书推送)")
     print(f"  {now.strftime('%Y-%m-%d %A')} | {now.strftime('%H:%M:%S')} CST")
     print("=" * 65)
 
@@ -709,7 +709,7 @@ def run_daily_report(manual_session=None):
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(description='贵金属日报系统')
+    parser = argparse.ArgumentParser(description='金油银哨兵 - 商品比价追踪系统')
     parser.add_argument('--session', '-s', 
                        choices=['亚盘收盘', '美盘收盘'],
                        help='手动指定时段（用于测试），不指定则根据当前时间自动判断')

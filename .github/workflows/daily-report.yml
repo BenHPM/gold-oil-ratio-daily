@@ -1,4 +1,4 @@
-name: 金油比日报
+name: 金油银哨兵
 
 on:
   schedule:
@@ -27,7 +27,7 @@ jobs:
       - name: 安装依赖
         run: pip install -r requirements.txt
 
-      - name: 执行金油比日报
+      - name: 执行金油银哨兵
         env:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
