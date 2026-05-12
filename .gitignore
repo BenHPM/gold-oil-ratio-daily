@@ -41,7 +41,8 @@ output.log
 debug_*.py
 _check_*.py
 _save_*.py
-*.json
+# 数据文件（明文数据不提交，加密数据提交）
+gold_oil_data.json
 
 # 本地配置文件
 .config/

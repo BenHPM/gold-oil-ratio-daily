@@ -443,7 +443,7 @@ def get_data_summary():
 
 if __name__ == "__main__":
     # 测试代码
-    print("数据存储模块测试 (v5 - AES-256-GCM 加密版)")
+    print("数据存储模块测试 (v6 - AES-256-GCM 加密版)")
     print(f"数据文件: {DATA_FILE}")
     print(f"加密文件: {DATA_FILE_ENCRYPTED}")
     print(f"加密模式: {'AES-256-GCM' if is_encryption_enabled() else '未启用'}")
