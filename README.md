@@ -95,10 +95,11 @@
 | `FEISHU_APP_SECRET` | 飞书应用的 App Secret | 飞书开放平台 → 应用凭证 |
 | `DATA_ENCRYPT_KEY` | 数据加密密钥 | 自定义一个强密码（建议 16 位以上随机字符串） |
 | `PUSH_TOKEN` | Git 推送 Token | GitHub Settings → Developer settings → Personal access tokens → 勾选 `repo` 权限 |
+| `FEISHU_BASE_TOKEN` | 多维表格 Token | 飞书多维表格链接中的 `appToken`（如 `XbyTbfY8WarPlZsaBYRcDkiBnMh`） |
 
 > ⚠️ 凭证存储在 GitHub Secrets 中，不会泄露。代码中不包含任何敏感信息。
 > 
-> **首次部署必须配置 `DATA_ENCRYPT_KEY` 和 `PUSH_TOKEN`**，否则 Actions 无法持久化数据。
+> **首次部署必须配置 `DATA_ENCRYPT_KEY`、`PUSH_TOKEN` 和 `FEISHU_BASE_TOKEN`**，否则 Actions 无法持久化数据和同步表格。
 
 ### 3. 手动触发测试
 

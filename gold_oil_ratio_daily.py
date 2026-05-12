@@ -41,6 +41,9 @@ FEISHU_APP_ID = os.environ.get("FEISHU_APP_ID", "")
 FEISHU_APP_SECRET = os.environ.get("FEISHU_APP_SECRET", "")
 FEISHU_BASE_URL = "https://open.feishu.cn/open-apis"
 
+# 飞书多维表格配置
+FEISHU_BASE_TOKEN = os.environ.get("FEISHU_BASE_TOKEN", "")  # 多维表格 Token
+
 # 金油比历史常态区间（1970年至今）- 用于分析要点参考
 HISTORICAL_RATIO_MIN = 10
 HISTORICAL_RATIO_MAX = 25
@@ -199,23 +202,26 @@ def generate_report(gold_price, oil_price, gold_chg, oil_chg, silver_price, silv
     if ratio > 50:
         ratio_level = "极端"
         ratio_comment = "金油比极端异常，市场严重分化，历史罕见危机信号"
-        header_color = "purple"
+        ratio_color = "purple"
     elif ratio > 35:
         ratio_level = "极高"
         ratio_comment = "金油比极高，通常预示重大危机，经济衰退风险显著增加"
-        header_color = "red"
+        ratio_color = "red"
     elif ratio > 25:
         ratio_level = "偏高"
         ratio_comment = "金油比偏高，市场避险情绪升温，需关注经济下行风险"
-        header_color = "orange"
+        ratio_color = "orange"
     elif ratio >= 10:
         ratio_level = "适中"
         ratio_comment = "金油比处于历史常态区间，经济运行相对稳定"
-        header_color = "blue"
+        ratio_color = "blue"
     else:
         ratio_level = "偏低"
         ratio_comment = "金油比偏低，经济过热或通胀预期强，原油需求旺盛"
-        header_color = "green"
+        ratio_color = "green"
+    
+    # 标题固定使用蓝色（中性、专业）
+    header_color = "blue"
 
     # 判断金银比水平（5级判定体系）
     if gs_ratio > 100:
@@ -280,7 +286,7 @@ def generate_report(gold_price, oil_price, gold_chg, oil_chg, silver_price, silv
                     "text": {
                         "tag": "lark_md",
                         "content": (
-                            f"🥇 **伦敦金现：**{gold_price:.2f} USD/盎司  {gold_arrow} {gold_chg_str}\n"
+                            f"🥇 **伦敦金现：{gold_price:.2f} USD/盎司**  {gold_arrow} {gold_chg_str}\n"
                             f"<font color='grey'>数据源: [Trading Economics]({GOLD_SOURCE_URL})</font>"
                         )
                     }
@@ -291,7 +297,7 @@ def generate_report(gold_price, oil_price, gold_chg, oil_chg, silver_price, silv
                     "text": {
                         "tag": "lark_md",
                         "content": (
-                            f"🛢️ **布伦特原油：**{oil_price:.2f} USD/桶  {oil_arrow} {oil_chg_str}\n"
+                            f"🛢️ **布伦特原油：{oil_price:.2f} USD/桶**  {oil_arrow} {oil_chg_str}\n"
                             f"<font color='grey'>数据源: [Trading Economics]({OIL_SOURCE_URL})</font>"
                         )
                     }
@@ -302,7 +308,7 @@ def generate_report(gold_price, oil_price, gold_chg, oil_chg, silver_price, silv
                     "text": {
                         "tag": "lark_md",
                         "content": (
-                            f"🥈 **伦敦银现：**{silver_price:.2f} USD/盎司  {silver_arrow} {silver_chg_str}\n"
+                            f"🥈 **伦敦银现：{silver_price:.2f} USD/盎司**  {silver_arrow} {silver_chg_str}\n"
                             f"<font color='grey'>数据源: [Trading Economics]({SILVER_SOURCE_URL})</font>"
                         )
                     }
@@ -314,7 +320,7 @@ def generate_report(gold_price, oil_price, gold_chg, oil_chg, silver_price, silv
                     "tag": "div",
                     "text": {
                         "tag": "lark_md",
-                        "content": f"**🎯 金油比：<font color='{header_color}'>{ratio:.2f}</font>**（{gold_price:.2f}/{oil_price:.2f}）"
+                        "content": f"**🎯 金油比：<font color='{ratio_color}'>{ratio:.2f}</font>**（{gold_price:.2f}/{oil_price:.2f}）"
                     }
                 },
                 # 金银比主数值 + 水平判断
@@ -392,7 +398,7 @@ def generate_report(gold_price, oil_price, gold_chg, oil_chg, silver_price, silv
                         "tag": "lark_md",
                         "content": (
                             f"**💡 分析要点**\n"
-                            f"当前金油比 **<font color='{header_color}'>{ratio:.2f}</font>** {ratio_level}于历史常态区间"
+                            f"当前金油比 **<font color='{ratio_color}'>{ratio:.2f}</font>** {ratio_level}于历史常态区间"
                             f"（{HISTORICAL_RATIO_MIN}:1~{HISTORICAL_RATIO_MAX}:1）。{ratio_comment}。\n"
                             f"当前金银比 **<font color='{gs_color}'>{gs_ratio:.2f}</font>** {gs_level}于历史常态区间"
                             f"（{GS_RATIO_MIN}:1~{GS_RATIO_MAX}:1）。{gs_comment}。\n"
@@ -572,6 +578,106 @@ class FeishuPusher:
             return False
 
 
+class FeishuBaseWriter:
+    """飞书多维表格写入器"""
+    
+    def __init__(self, app_id, app_secret, base_token):
+        self.app_id = app_id
+        self.app_secret = app_secret
+        self.base_token = base_token
+        self.base_url = "https://open.feishu.cn/open-apis"
+        self.token = None
+    
+    def get_token(self):
+        """获取飞书 tenant_access_token"""
+        url = f"{self.base_url}/auth/v3/tenant_access_token/internal"
+        payload = {"app_id": self.app_id, "app_secret": self.app_secret}
+        try:
+            resp = requests.post(url, json=payload, timeout=10)
+            data = resp.json()
+            if data.get("code") == 0:
+                self.token = data["tenant_access_token"]
+                return True
+            else:
+                print(f"  ❌ 获取飞书Token失败: {data.get('msg', '')}")
+                return False
+        except Exception as e:
+            print(f"  ❌ 获取飞书Token异常: {e}")
+            return False
+    
+    def list_tables(self):
+        """列出多维表格中的所有表格"""
+        if not self.token:
+            if not self.get_token():
+                return None
+        
+        url = f"{self.base_url}/bitable/v1/apps/{self.base_token}/tables"
+        headers = {"Authorization": f"Bearer {self.token}"}
+        
+        try:
+            resp = requests.get(url, headers=headers, timeout=10)
+            data = resp.json()
+            if data.get("code") == 0:
+                tables = data.get("data", {}).get("items", [])
+                for t in tables:
+                    print(f"    表格: {t.get('name')} | ID: {t.get('table_id')}")
+                return tables
+            else:
+                print(f"  ❌ 获取表格列表失败: {data.get('msg', '')}")
+                return None
+        except Exception as e:
+            print(f"  ❌ 获取表格列表异常: {e}")
+            return None
+    
+    def write_record(self, date, session, gold_price, oil_price, silver_price, go_ratio, gs_ratio):
+        """写入数据到多维表格"""
+        if not self.token:
+            if not self.get_token():
+                return False
+        
+        if not self.base_token:
+            print("  ⚠️ 未配置 FEISHU_BASE_TOKEN，跳过表格写入")
+            return False
+        
+        # 使用固定表格ID（从URL中提取: tbl45ibgwJmbtCGF）
+        table_id = "tbl45ibgwJmbtCGF"
+        url = f"{self.base_url}/bitable/v1/apps/{self.base_token}/tables/{table_id}/records"
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Content-Type": "application/json"
+        }
+        
+        # 构建字段数据
+        # 日期字段需要 Unix 时间戳（毫秒）
+        date_ts = int(time.mktime(time.strptime(date, "%Y-%m-%d"))) * 1000
+        fields = {
+            "日期": date_ts,
+            "时段": session,
+            "伦敦金现": float(gold_price) if gold_price else 0,
+            "布伦特原油": float(oil_price) if oil_price else 0,
+            "伦敦银现": float(silver_price) if silver_price else 0,
+            "金油比": float(go_ratio) if go_ratio else 0,
+            "金银比": float(gs_ratio) if gs_ratio else 0,
+            "创建时间": int(time.time() * 1000)  # 毫秒时间戳
+        }
+        
+        payload = {"fields": fields}
+        
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=15)
+            data = resp.json()
+            
+            if data.get("code") == 0:
+                print("  ✅ 多维表格写入成功！")
+                return True
+            else:
+                print(f"  ❌ 多维表格写入失败: {data.get('msg', '')[:80]}")
+                return False
+        except Exception as e:
+            print(f"  ❌ 多维表格写入异常: {e}")
+            return False
+
+
 # =====================================================
 # 主程序
 # =====================================================
@@ -627,6 +733,12 @@ def run_daily_report(manual_session=None):
     add_record(gold_price, oil_price, ratio, session,
                silver_price=silver_price, gs_ratio=gs_ratio)
     print(f"  数据汇总: {get_data_summary()}")
+    
+    # 同步写入飞书多维表格
+    print("\n[2.5/4] 同步到多维表格...")
+    base_writer = FeishuBaseWriter(FEISHU_APP_ID, FEISHU_APP_SECRET, FEISHU_BASE_TOKEN)
+    today_str = now.strftime('%Y-%m-%d')
+    base_writer.write_record(today_str, session, gold_price, oil_price, silver_price, ratio, gs_ratio)
 
     # 计算多维度对比数据（金油比 + 金银比）
     print("\n[3/4] 计算数据对比...")

@@ -32,6 +32,7 @@ jobs:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
           DATA_ENCRYPT_KEY: ${{ secrets.DATA_ENCRYPT_KEY }}
+          FEISHU_BASE_TOKEN: ${{ secrets.FEISHU_BASE_TOKEN }}
         run: python gold_oil_ratio_daily.py
 
       - name: 提交加密数据到仓库
